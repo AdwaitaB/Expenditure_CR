@@ -12,7 +12,7 @@ from datetime import datetime
 # ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AB Group – Expense Analyser",
-    page_icon="📊",
+    page_icon="/Users/adwaitaboralkar/Downloads/logo-1.png",
     layout="wide",
 )
 
