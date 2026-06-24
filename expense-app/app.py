@@ -38,7 +38,7 @@ st.markdown("""
         box-shadow: 0 1px 4px rgba(0,0,0,0.08);
     }
     div[data-testid="stMetricValue"] { color: #1E3A5F !important; }
-    div[data-testid="stMetricLabel"] { color: #374151 !important; }
+    div[data-testid="stMetricLabel"] { color: #111827 !important; }
 
     /* Buttons */
     .stButton > button { border-radius: 8px; font-weight: 600; }
