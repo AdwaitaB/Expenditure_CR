@@ -1,147 +1,137 @@
+
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from io import BytesIO
-import json
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from datetime import datetime
 
-# ─── Page Config ─────────────────────────────────────────────────────────────
+# ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AB Group – Expense Analyser",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed",
 )
 
-# ─── Category Mapping ─────────────────────────────────────────────────────────
-CATEGORY_MAP = {
-    # Food & Kitchen
-    "Grocery": "Food & Kitchen",
-    "Vegetable": "Food & Kitchen",
-    "Fruit": "Food & Kitchen",
-    "Nonveg": "Food & Kitchen",
-    "Milk & Products": "Food & Kitchen",
-    "Colddrink": "Food & Kitchen",
-    "Icecream": "Food & Kitchen",
-    "Gas": "Food & Kitchen",
-    "Packing": "Food & Kitchen",
-    # Staff & HR
-    "Staff Salary": "Staff & HR",
-    "PSTL Salary": "Staff & HR",
-    "Salary Advance": "Staff & HR",
-    "Professional Fees": "Staff & HR",
-    "Uniform & Shoes Expenses": "Staff & HR",
-    "Medical": "Staff & HR",
-    "Chetan": "Staff & HR",
-    "Paresh": "Staff & HR",
-    "Prashant": "Staff & HR",
-    "Vikram Sir": "Staff & HR",
-    "Child": "Staff & HR",
-    # Utilities
-    "Electricity": "Utilities",
-    "Internet": "Utilities",
-    "Mobile Exps": "Utilities",
-    "Generator Rent": "Utilities",
-    "Fuel": "Utilities",
-    "PSTL-Fuel": "Utilities",
-    "Fuel Used for PSTL ": "Utilities",
-    "Transport": "Utilities",
-    "Conveyence": "Utilities",
-    # Maintenance & Repairs
-    "Repairs Civil": "Maintenance & Repairs",
-    "Repairs Furniture": "Maintenance & Repairs",
-    "Repairs Computer": "Maintenance & Repairs",
-    "Hardware": "Maintenance & Repairs",
-    "Electrical": "Maintenance & Repairs",
-    "Civil": "Maintenance & Repairs",
-    "Paint": "Maintenance & Repairs",
-    "Material": "Maintenance & Repairs",
-    "Labour Charges": "Maintenance & Repairs",
-    "Fabrication": "Maintenance & Repairs",
-    # Assets & Equipment
-    "Furniture": "Assets & Equipment",
-    "PSTL-Furniture": "Assets & Equipment",
-    "Machinery": "Assets & Equipment",
-    "Utensils": "Assets & Equipment",
-    "Cloth & Mattress": "Assets & Equipment",
-    "Sports Material": "Assets & Equipment",
-    "PSTL-Sports Material": "Assets & Equipment",
-    # Guest & Operations
-    "VIP Guest Expenses": "Guest & Operations",
-    "Decoration": "Guest & Operations",
-    "Anciliary Services": "Guest & Operations",
-    "Housekeeping": "Guest & Operations",
-    "Gardening": "Guest & Operations",
-    # Marketing & Admin
-    "Advertising Expenses": "Marketing & Admin",
-    "PSTL-Advertising Expenses": "Marketing & Admin",
-    "Printing and Stationery": "Marketing & Admin",
-    "Comission Paid": "Marketing & Admin",
+# ─── CSS: fix white-on-white tab text + general styling ───────────────────────
+st.markdown("""
+<style>
+    /* Tab text color fix */
+    .stTabs [data-baseweb="tab"] { color: #1E3A5F !important; font-weight: 600; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #2563EB !important; border-bottom: 3px solid #2563EB; }
+    .stTabs [data-baseweb="tab-list"] { background: #F0F4FF; border-radius: 10px; padding: 4px; gap: 4px; }
+
+    /* Header */
+    .main-header {
+        background: linear-gradient(135deg, #1E3A5F 0%, #2563EB 100%);
+        padding: 1.2rem 2rem; border-radius: 12px;
+        margin-bottom: 1.5rem; color: white;
+    }
+
+    /* Metrics */
+    div[data-testid="stMetric"] {
+        background: white; border-radius: 10px;
+        padding: 0.8rem 1rem;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    div[data-testid="stMetricValue"] { color: #1E3A5F !important; }
+    div[data-testid="stMetricLabel"] { color: #374151 !important; }
+
+    /* Buttons */
+    .stButton > button { border-radius: 8px; font-weight: 600; }
+
+    footer { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
+# ─── Category → Main Category Map ─────────────────────────────────────────────
+# Based directly on the summary file structure
+SUMMARY_STRUCTURE = {
+    "Kitchen Consumables (a)": [
+        "Grocery", "Vegetable", "Fruit", "Milk & Products",
+        "Nonveg", "Colddrink", "Icecream",
+    ],
+    "Consumables (b)": [
+        "Gas", "Housekeeping", "Decoration",
+    ],
+    "Monthly Expenses ( C)": [
+        "Staff Salary", "PSTL Salary", "Electricity", "Fuel", "PSTL-Fuel",
+        "Internet", "Mobile Exps", "Generator Rent", "Uniform & Shoes Expenses",
+        "Printing and Stationery", "Bank Charges", "Packing", "Medical",
+        "Paint", "Transport", "Advertising Expenses", "PSTL-Advertising Expenses",
+        "Material", "Professional Fees", "Anciliary Services",
+        "Repairs Civil", "Repairs Furniture", "Repairs Computer",
+        "Repairs Electrical", "Labour Charges", "Conveyence",
+    ],
+    "Capital Expenses (d)": [
+        "Hardware", "Electrical", "Civil", "Gardening", "Utensils",
+        "Sports Material", "Furniture", "Cloth & Mattress", "Machinery",
+        "Fabrication", "VIP Guest Expenses", "Additional PSTL",
+        "PSTL-Sports Material", "PSTL-Furniture", "PSTL-AC",
+    ],
 }
 
-MAIN_CATEGORIES = list(dict.fromkeys(CATEGORY_MAP.values())) + ["Other"]
-ALL_EXPENSE_HEADS = sorted(CATEGORY_MAP.keys())
+# Flat map: expense_head → main_category_group
+HEAD_TO_GROUP = {}
+for group, heads in SUMMARY_STRUCTURE.items():
+    for h in heads:
+        HEAD_TO_GROUP[h.strip().lower()] = group
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-def get_main_category(expense_head):
-    if not expense_head or str(expense_head).strip() in ("", "nan", "0", "1", "2"):
-        return None
-    return CATEGORY_MAP.get(str(expense_head).strip(), None)
+ALL_KNOWN_HEADS = sorted([h for heads in SUMMARY_STRUCTURE.values() for h in heads])
 
-def fmt_inr(amount):
-    """Format number as Indian Rupee with lakhs formatting."""
+
+def get_group(expense_head):
+    if not expense_head:
+        return "Other"
+    return HEAD_TO_GROUP.get(str(expense_head).strip().lower(), "Other")
+
+
+def fmt_inr(n):
     try:
-        amount = float(amount)
-        if amount >= 100000:
-            return f"₹{amount/100000:.2f}L"
-        elif amount >= 1000:
-            return f"₹{amount/1000:.1f}K"
-        else:
-            return f"₹{amount:,.0f}"
+        n = float(n)
+        if n >= 1e7:   return f"₹{n/1e7:.2f}Cr"
+        if n >= 1e5:   return f"₹{n/1e5:.2f}L"
+        if n >= 1000:  return f"₹{n/1000:.1f}K"
+        return f"₹{n:,.0f}"
     except:
         return "₹0"
 
-def is_upi_sheet(df_raw):
-    """Check if a sheet looks like a UPI bank statement."""
-    for i in range(min(5, len(df_raw))):
-        row_vals = [str(v) for v in df_raw.iloc[i].values]
-        row_str = " ".join(row_vals)
-        if "Expense Head" in row_str and "Debit" in row_str:
-            return True
-    return False
 
-def parse_upi_sheet(df_raw, sheet_name):
-    """Parse a UPI statement sheet into clean records."""
-    header_idx = -1
+# ─── Parser ───────────────────────────────────────────────────────────────────
+def parse_expense_sheet(file_obj):
+    """
+    Parse the new-format expense Excel.
+    F column (index 5) = Expense Head — use directly.
+    Returns (DataFrame of records, sheet_name, month_label)
+    """
+    xl = pd.ExcelFile(file_obj)
+    all_records = []
+    sheet_name = xl.sheet_names[0]  # use first sheet
+
+    df_raw = pd.read_excel(xl, sheet_name=sheet_name, header=None)
+
+    # Find header row (row with "Expense Head" in col 5)
+    header_idx = 0
     for i in range(min(5, len(df_raw))):
-        row_vals = [str(v) for v in df_raw.iloc[i].values]
-        row_str = " ".join(row_vals)
-        if "Expense Head" in row_str and "Debit" in row_str:
+        val = str(df_raw.iloc[i, 5]).strip()
+        if "Expense Head" in val or "expense head" in val.lower():
             header_idx = i
             break
 
-    if header_idx == -1:
-        return pd.DataFrame(), []
-
-    headers = [str(v).strip() for v in df_raw.iloc[header_idx].values]
     data = df_raw.iloc[header_idx + 1:].copy()
-    data.columns = headers
+    data.columns = range(len(data.columns))
 
-    # Find key columns flexibly
-    date_col   = next((c for c in headers if "date" in c.lower()), None)
-    debit_col  = next((c for c in headers if c.lower() == "debit"), None)
-    desc_col   = next((c for c in headers if "transaction" in c.lower() or "details" in c.lower()), None)
-    head_col   = next((c for c in headers if "expense head" in c.lower()), None)
-    acct_col   = next((c for c in headers if "statement" in c.lower()), None)
-
-    if not debit_col or not head_col:
-        return pd.DataFrame(), []
-
-    records = []
-    uncategorized = []
-
+    # Col indices (0-based): 0=Statement, 1=Date, 2=Description, 3=Debit, 4=Credit, 5=ExpenseHead, 6=Bills
     for _, row in data.iterrows():
-        raw_debit = str(row.get(debit_col, "")).replace(",", "").strip()
+        # Skip total/empty rows
+        stmt = str(row.get(0, "")).strip()
+        if stmt.lower() in ("total", "nan", "") and str(row.get(3, "")).strip() in ("nan", ""):
+            continue
+
+        raw_debit = str(row.get(3, "")).replace(",", "").strip()
         try:
             debit = float(raw_debit)
         except ValueError:
@@ -149,364 +139,421 @@ def parse_upi_sheet(df_raw, sheet_name):
         if debit <= 0:
             continue
 
-        expense_head = str(row.get(head_col, "")).strip()
-        desc         = str(row.get(desc_col, "")).strip() if desc_col else ""
-        date         = str(row.get(date_col, "")).strip() if date_col else ""
-        account      = str(row.get(acct_col, "")).strip() if acct_col else ""
+        expense_head = str(row.get(5, "")).strip()
+        if expense_head in ("nan", "Expense Head", ""):
+            expense_head = ""
 
-        # Clean date if it's a pandas Timestamp artifact
-        if "00:00:00" in date:
-            date = date.split(" ")[0]
+        date_raw = row.get(1, "")
+        try:
+            if isinstance(date_raw, (pd.Timestamp, datetime)):
+                date_str = pd.Timestamp(date_raw).strftime("%d/%m/%y")
+            else:
+                date_str = str(date_raw).strip().split(" ")[0]
+                if "00:00:00" in str(date_raw):
+                    date_str = pd.Timestamp(date_raw).strftime("%d/%m/%y")
+        except:
+            date_str = str(date_raw)
 
-        main_cat = get_main_category(expense_head)
-        is_missing = (not expense_head or expense_head in ("nan", "0", "1", "2", ""))
+        desc = str(row.get(2, "")).strip()
+        account = stmt if stmt not in ("nan", "") else "UPI"
+        bills = str(row.get(6, "")).strip()
+        bills = "" if bills == "nan" else bills
 
-        rec = {
-            "Date": date,
+        all_records.append({
+            "Date": date_str,
             "Description": desc[:80],
             "Amount": debit,
-            "Expense Head": expense_head if not is_missing else "",
-            "Main Category": main_cat or "Other",
-            "Source": sheet_name,
-            "Type": "UPI/Bank",
-            "Needs Category": is_missing,
-        }
-        records.append(rec)
-        if is_missing:
-            uncategorized.append(rec.copy())
+            "Expense Head": expense_head,
+            "Main Group": get_group(expense_head) if expense_head else "Other",
+            "Account": account,
+            "Bills": bills,
+            "Needs Category": expense_head == "",
+        })
 
-    return pd.DataFrame(records), uncategorized
+    df = pd.DataFrame(all_records)
 
-# ─── Session State Init ───────────────────────────────────────────────────────
-if "all_records" not in st.session_state:
-    st.session_state.all_records = pd.DataFrame()
+    # Derive month label from sheet name
+    month_label = sheet_name.strip()
+
+    return df, sheet_name, month_label
+
+
+# ─── Summary Excel Generator ──────────────────────────────────────────────────
+def generate_summary_excel(df, month_label):
+    """
+    Generate summary Excel matching the summary_feb_2026 format exactly.
+    Returns BytesIO of the xlsx file.
+    """
+    # Aggregate by expense head
+    totals = {}
+    for head in ALL_KNOWN_HEADS:
+        mask = df["Expense Head"].str.strip().str.lower() == head.strip().lower()
+        totals[head] = round(df.loc[mask, "Amount"].sum(), 2)
+
+    # Catch "Other" entries
+    other_mask = df["Main Group"] == "Other"
+    other_total = round(df.loc[other_mask, "Amount"].sum(), 2)
+
+    # Compute group subtotals
+    kitchen_heads = SUMMARY_STRUCTURE["Kitchen Consumables (a)"]
+    consumable_heads = SUMMARY_STRUCTURE["Consumables (b)"]
+    monthly_heads = SUMMARY_STRUCTURE["Monthly Expenses ( C)"]
+    capital_heads = SUMMARY_STRUCTURE["Capital Expenses (d)"]
+
+    kitchen_total  = sum(totals.get(h, 0) for h in kitchen_heads)
+    consumable_total = sum(totals.get(h, 0) for h in consumable_heads)
+    monthly_total  = sum(totals.get(h, 0) for h in monthly_heads)
+    capital_total  = sum(totals.get(h, 0) for h in capital_heads)
+    grand_total    = kitchen_total + consumable_total + monthly_total + capital_total + other_total
+
+    # ── Build workbook ──
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+
+    # Colors
+    BLUE_DARK   = "1E3A5F"
+    BLUE_MID    = "2563EB"
+    BLUE_LIGHT  = "DBEAFE"
+    GREY_ROW    = "F8FAFC"
+    WHITE       = "FFFFFF"
+    ORANGE      = "D97706"
+    GREEN       = "16A34A"
+    HEADER_BG   = "1E3A5F"
+
+    def style_cell(cell, bold=False, bg=None, fg="000000", align="left", size=10, border=False, num_fmt=None):
+        cell.font = Font(bold=bold, color=fg, size=size, name="Calibri")
+        if bg:
+            cell.fill = PatternFill("solid", fgColor=bg)
+        cell.alignment = Alignment(horizontal=align, vertical="center", wrap_text=False)
+        if border:
+            thin = Side(style="thin", color="D1D5DB")
+            cell.border = Border(bottom=thin, top=thin, left=thin, right=thin)
+        if num_fmt:
+            cell.number_format = num_fmt
+
+    # ── Title rows ──
+    ws.merge_cells("A1:J1")
+    ws["A1"] = "AB GROUP – EXPENSE SUMMARY"
+    style_cell(ws["A1"], bold=True, bg=HEADER_BG, fg=WHITE, align="center", size=14)
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells("A2:J2")
+    ws["A2"] = f"Month: {month_label}   |   Generated: {datetime.today().strftime('%d %b %Y')}"
+    style_cell(ws["A2"], bg="2563EB", fg=WHITE, align="center", size=10)
+    ws.row_dimensions[2].height = 18
+
+    ws.row_dimensions[3].height = 8  # spacer
+
+    # ── Column headers ──
+    ws.row_dimensions[4].height = 22
+    ws["A4"] = "Particulars"
+    ws["B4"] = month_label
+    ws["C4"] = "Total"
+    for col in ["A4", "B4", "C4"]:
+        style_cell(ws[col], bold=True, bg=HEADER_BG, fg=WHITE, align="center", size=10, border=True)
+
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 16
+
+    row = 5
+    section_colors = {
+        "Kitchen Consumables (a)": "1D4ED8",
+        "Consumables (b)":         "0369A1",
+        "Monthly Expenses ( C)":   "065F46",
+        "Capital Expenses (d)":    "92400E",
+    }
+    section_subtotal_bgs = {
+        "Kitchen Consumables (a)": "BFDBFE",
+        "Consumables (b)":         "BAE6FD",
+        "Monthly Expenses ( C)":   "A7F3D0",
+        "Capital Expenses (d)":    "FEF3C7",
+    }
+
+    def write_section(section_name, heads, subtotal):
+        nonlocal row
+        # Section header
+        ws.row_dimensions[row].height = 20
+        ws[f"A{row}"] = section_name
+        ws[f"B{row}"] = ""
+        ws[f"C{row}"] = ""
+        clr = section_colors.get(section_name, BLUE_DARK)
+        for col in ["A", "B", "C"]:
+            style_cell(ws[f"{col}{row}"], bold=True, bg=clr, fg=WHITE, align="left", size=10)
+        row += 1
+
+        # Item rows
+        for i, head in enumerate(heads):
+            ws.row_dimensions[row].height = 17
+            amt = totals.get(head, 0)
+            bg = WHITE if i % 2 == 0 else GREY_ROW
+            ws[f"A{row}"] = f"  {head}"
+            ws[f"B{row}"] = amt if amt else 0
+            ws[f"C{row}"] = amt if amt else 0
+            style_cell(ws[f"A{row}"], bg=bg, size=10)
+            style_cell(ws[f"B{row}"], bg=bg, align="right", size=10, num_fmt='#,##0.00')
+            style_cell(ws[f"C{row}"], bg=bg, align="right", size=10, num_fmt='#,##0.00')
+            row += 1
+
+        # Subtotal row
+        ws.row_dimensions[row].height = 18
+        st_bg = section_subtotal_bgs.get(section_name, BLUE_LIGHT)
+        ws[f"A{row}"] = f"  Sub-total — {section_name}"
+        ws[f"B{row}"] = subtotal
+        ws[f"C{row}"] = subtotal
+        style_cell(ws[f"A{row}"], bold=True, bg=st_bg, size=10)
+        style_cell(ws[f"B{row}"], bold=True, bg=st_bg, align="right", size=10, num_fmt='#,##0.00')
+        style_cell(ws[f"C{row}"], bold=True, bg=st_bg, align="right", size=10, num_fmt='#,##0.00')
+        row += 1
+        ws.row_dimensions[row].height = 5  # spacer
+        row += 1
+
+    write_section("Kitchen Consumables (a)", kitchen_heads, kitchen_total)
+    write_section("Consumables (b)", consumable_heads, consumable_total)
+    write_section("Monthly Expenses ( C)", monthly_heads, monthly_total)
+    write_section("Capital Expenses (d)", capital_heads, capital_total)
+
+    # Other / Uncategorised
+    if other_total > 0:
+        ws.row_dimensions[row].height = 20
+        ws[f"A{row}"] = "Other / Uncategorised"
+        ws[f"B{row}"] = ""
+        ws[f"C{row}"] = ""
+        for col in ["A", "B", "C"]:
+            style_cell(ws[f"{col}{row}"], bold=True, bg="6B7280", fg=WHITE, size=10)
+        row += 1
+        other_items = df[df["Main Group"] == "Other"].groupby("Expense Head")["Amount"].sum()
+        for i, (head, amt) in enumerate(other_items.items()):
+            bg = WHITE if i % 2 == 0 else GREY_ROW
+            ws[f"A{row}"] = f"  {head if head else '(Blank)'}"
+            ws[f"B{row}"] = round(amt, 2)
+            ws[f"C{row}"] = round(amt, 2)
+            style_cell(ws[f"A{row}"], bg=bg, size=10)
+            style_cell(ws[f"B{row}"], bg=bg, align="right", size=10, num_fmt='#,##0.00')
+            style_cell(ws[f"C{row}"], bg=bg, align="right", size=10, num_fmt='#,##0.00')
+            row += 1
+        ws[f"A{row}"] = "  Sub-total — Other"
+        ws[f"B{row}"] = other_total
+        ws[f"C{row}"] = other_total
+        style_cell(ws[f"A{row}"], bold=True, bg="E5E7EB", size=10)
+        style_cell(ws[f"B{row}"], bold=True, bg="E5E7EB", align="right", size=10, num_fmt='#,##0.00')
+        style_cell(ws[f"C{row}"], bold=True, bg="E5E7EB", align="right", size=10, num_fmt='#,##0.00')
+        row += 1
+        row += 1
+
+    # ── Totals footer ──
+    # Summary sub-totals section (matching the original)
+    summaries = [
+        ("Total Kitchen Consumables", kitchen_total, "BFDBFE"),
+        ("Total Consumables",         consumable_total, "BAE6FD"),
+        ("Total Monthly Expenses",    monthly_total,  "A7F3D0"),
+        ("Total Capital Expenses",    capital_total,  "FEF3C7"),
+        ("Other / Uncategorised",     other_total,    "E5E7EB"),
+    ]
+    ws[f"A{row}"] = "GRAND TOTAL"
+    ws[f"B{row}"] = grand_total
+    ws[f"C{row}"] = grand_total
+    ws.row_dimensions[row].height = 22
+    for col in ["A", "B", "C"]:
+        style_cell(ws[f"{col}{row}"], bold=True, bg=HEADER_BG, fg=WHITE,
+                   align="right" if col != "A" else "left", size=11,
+                   border=True, num_fmt='#,##0.00' if col != "A" else None)
+    row += 2
+
+    ws[f"A{row}"] = "Breakdown"
+    style_cell(ws[f"A{row}"], bold=True, bg="374151", fg=WHITE, size=10)
+    style_cell(ws[f"B{row}"], bold=True, bg="374151", fg=WHITE, size=10)
+    style_cell(ws[f"C{row}"], bold=True, bg="374151", fg=WHITE, size=10)
+    row += 1
+    for label, val, bg in summaries:
+        ws[f"A{row}"] = f"  {label}"
+        ws[f"B{row}"] = val
+        ws[f"C{row}"] = val
+        ws.row_dimensions[row].height = 17
+        style_cell(ws[f"A{row}"], bg=bg, size=10)
+        style_cell(ws[f"B{row}"], bg=bg, align="right", size=10, num_fmt='#,##0.00')
+        style_cell(ws[f"C{row}"], bg=bg, align="right", size=10, num_fmt='#,##0.00')
+        row += 1
+
+    # Freeze top rows
+    ws.freeze_panes = "A5"
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+# ─── Session State ─────────────────────────────────────────────────────────────
+if "records" not in st.session_state:
+    st.session_state.records = pd.DataFrame()
 if "cash_entries" not in st.session_state:
     st.session_state.cash_entries = []
-if "uncat_queue" not in st.session_state:
-    st.session_state.uncat_queue = []
-if "sheets_loaded" not in st.session_state:
-    st.session_state.sheets_loaded = []
-
-# ─── Custom CSS ───────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .main-header {
-        background: linear-gradient(135deg, #1E3A5F 0%, #2563EB 100%);
-        padding: 1.2rem 2rem;
-        border-radius: 12px;
-        margin-bottom: 1.5rem;
-        color: white;
-    }
-    .metric-card {
-        background: white;
-        border-radius: 10px;
-        padding: 1rem 1.2rem;
-        border-left: 4px solid;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-    }
-    .uncat-banner {
-        background: #FFFBEB;
-        border: 1px solid #FCD34D;
-        border-radius: 10px;
-        padding: 1rem 1.2rem;
-        margin-bottom: 1rem;
-    }
-    div[data-testid="stMetric"] {
-        background: white;
-        border-radius: 10px;
-        padding: 0.8rem 1rem;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.07);
-    }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        padding: 6px 18px;
-        font-weight: 600;
-    }
-    footer { visibility: hidden; }
-</style>
-""", unsafe_allow_html=True)
+if "month_label" not in st.session_state:
+    st.session_state.month_label = ""
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="main-header">
-    <h2 style="margin:0; font-size:1.5rem;">📊 AB Group — Expense Analyser</h2>
-    <p style="margin:0.2rem 0 0; opacity:0.75; font-size:0.85rem;">FY 2025-26 · Internal Finance Tool</p>
+    <h2 style="margin:0;font-size:1.5rem;">📊 AB Group — Expense Analyser</h2>
+    <p style="margin:0.2rem 0 0;opacity:0.75;font-size:0.85rem;">Upload monthly expense sheet → Analyse → Download Summary Excel</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ─── File Upload ──────────────────────────────────────────────────────────────
-with st.container():
-    uploaded_files = st.file_uploader(
-        "📂 Upload UPI Bank Statement(s)",
-        type=["xlsx", "xls"],
-        accept_multiple_files=True,
-        help="Upload one or more Excel files. Each sheet named like 'Oct 25', 'Nov 25', etc. will be detected automatically."
-    )
+# ─── Upload ───────────────────────────────────────────────────────────────────
+uploaded = st.file_uploader(
+    "📂 Upload Monthly Expense File (.xlsx)",
+    type=["xlsx", "xls"],
+    help="Upload the monthly UPI/cash expense file. F column (Expense Head) is used directly for categorisation."
+)
 
-    if uploaded_files:
-        new_sheets = []
-        all_records_list = []
-        all_uncat = []
+if uploaded:
+    try:
+        df_parsed, sheet_name, month_label = parse_expense_sheet(uploaded)
+        st.session_state.records    = df_parsed
+        st.session_state.month_label = month_label
+        n_uncat = df_parsed["Needs Category"].sum()
+        st.success(f"✅ Loaded **{sheet_name}** — {len(df_parsed)} transactions · "
+                   f"{'⚠️ ' + str(n_uncat) + ' missing Expense Head (added to Other)' if n_uncat else 'All categorised'}")
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
 
-        for f in uploaded_files:
-            try:
-                xl = pd.ExcelFile(f)
-                for sheet in xl.sheet_names:
-                    df_raw = pd.read_excel(xl, sheet_name=sheet, header=None)
-                    if is_upi_sheet(df_raw):
-                        df_parsed, uncat = parse_upi_sheet(df_raw, sheet)
-                        if not df_parsed.empty:
-                            new_sheets.append(sheet)
-                            all_records_list.append(df_parsed)
-                            all_uncat.extend(uncat)
-            except Exception as e:
-                st.error(f"Could not read {f.name}: {e}")
-
-        if all_records_list:
-            st.session_state.all_records = pd.concat(all_records_list, ignore_index=True)
-            st.session_state.sheets_loaded = new_sheets
-            # Only queue truly missing expense heads
-            st.session_state.uncat_queue = [u for u in all_uncat if not u.get("Expense Head")]
-            st.success(f"✅ Loaded **{len(new_sheets)} sheet(s)**: {', '.join(new_sheets)}  |  **{len(st.session_state.all_records)}** transactions")
-        elif uploaded_files:
-            st.warning("No UPI statement sheets found. Make sure your file has columns: Date, Transaction Details, Debit, Expense Head.")
-
-# ─── Uncategorized Queue ──────────────────────────────────────────────────────
-if st.session_state.uncat_queue:
-    remaining = st.session_state.uncat_queue
-    st.markdown(f"""
-    <div class="uncat-banner">
-        ⚠️ <strong>{len(remaining)} transaction(s)</strong> have no Expense Head — please categorise them below.
-    </div>
-    """, unsafe_allow_html=True)
-
-    with st.expander(f"🏷️ Categorise {len(remaining)} transaction(s)", expanded=True):
-        resolved_indices = []
-        for idx, item in enumerate(remaining[:10]):
-            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-            with col1:
-                st.caption(f"**{item['Description'][:60]}**  \n{item['Date']} · ₹{item['Amount']:,.0f}")
-            with col2:
-                head = st.selectbox("Expense Head", ["— Select —"] + ALL_EXPENSE_HEADS, key=f"uq_head_{idx}")
-            with col3:
-                auto_cat = get_main_category(head) if head != "— Select —" else None
-                cat = st.selectbox("Main Category", ["— Auto —"] + MAIN_CATEGORIES,
-                                   index=0 if not auto_cat else MAIN_CATEGORIES.index(auto_cat) + 1,
-                                   key=f"uq_cat_{idx}")
-            with col4:
-                st.write("")
-                if st.button("Save", key=f"uq_save_{idx}"):
-                    if head != "— Select —":
-                        final_cat = cat if cat != "— Auto —" else (auto_cat or "Other")
-                        # Update the main records
-                        mask = (
-                            (st.session_state.all_records["Description"] == item["Description"]) &
-                            (st.session_state.all_records["Date"] == item["Date"]) &
-                            (st.session_state.all_records["Amount"] == item["Amount"])
-                        )
-                        st.session_state.all_records.loc[mask, "Expense Head"] = head
-                        st.session_state.all_records.loc[mask, "Main Category"] = final_cat
-                        st.session_state.all_records.loc[mask, "Needs Category"] = False
-                        resolved_indices.append(idx)
-                        st.rerun()
-
-        if len(remaining) > 10:
-            st.caption(f"…and {len(remaining)-10} more. Save the above to proceed.")
-
-        # Remove resolved
-        st.session_state.uncat_queue = [u for i, u in enumerate(remaining) if i not in resolved_indices]
-
-# ─── Main Content ─────────────────────────────────────────────────────────────
-df = st.session_state.all_records.copy()
-
-# Add cash entries
+# Combine records + cash
+df = st.session_state.records.copy()
 cash_df = pd.DataFrame(st.session_state.cash_entries) if st.session_state.cash_entries else pd.DataFrame()
 if not cash_df.empty:
     combined = pd.concat([df, cash_df], ignore_index=True)
 else:
     combined = df.copy()
 
-tab1, tab2, tab3 = st.tabs(["📊 Analysis", "📋 All Records", "💵 Cash Entry"])
+# ─── PRIMARY: Download Summary Excel ──────────────────────────────────────────
+if not combined.empty:
+    st.markdown("---")
+    col_dl1, col_dl2, col_dl3 = st.columns([2, 1, 2])
+    with col_dl2:
+        month_label = st.session_state.month_label or "Month"
+        excel_buf = generate_summary_excel(combined, month_label)
+        st.download_button(
+            label="📥 Download Summary Excel",
+            data=excel_buf,
+            file_name=f"Summary_{month_label.replace(' ', '_').replace('/', '-')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary",
+        )
+    st.markdown("---")
 
-# ══════════════════════════════════════════════════════════
-# TAB 1 — ANALYSIS
-# ══════════════════════════════════════════════════════════
+# ─── Tabs ─────────────────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "📋 All Records", "💵 Cash Entry", "🏷️ Categorise"])
+
+# ══ TAB 1: ANALYSIS ══════════════════════════════════════════════════════════
 with tab1:
     if combined.empty:
-        st.info("👆 Upload a UPI bank statement above to see spending analysis.")
+        st.info("👆 Upload a monthly expense file to see analysis.")
     else:
-        total     = combined["Amount"].sum()
-        upi_total = df["Amount"].sum() if not df.empty else 0
-        cash_total = cash_df["Amount"].sum() if not cash_df.empty else 0
-        num_txns  = len(combined)
+        total = combined["Amount"].sum()
+        n_txn = len(combined)
+        n_other = (combined["Main Group"] == "Other").sum()
 
-        # ── Month filter
-        months = ["All Months"] + (
-            sorted(combined["Source"].unique().tolist()) if "Source" in combined.columns else []
-        )
-        selected_month = st.selectbox("Filter by Month", months, key="month_filter")
-        view_df = combined if selected_month == "All Months" else combined[combined["Source"] == selected_month]
-
-        # ── KPI row
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("💰 Total Expenses", fmt_inr(view_df["Amount"].sum()))
-        c2.metric("🏦 UPI / Bank", fmt_inr(view_df[view_df["Type"] == "UPI/Bank"]["Amount"].sum()))
-        c3.metric("💵 Cash", fmt_inr(view_df[view_df["Type"] == "Cash"]["Amount"].sum()) if "Type" in view_df else "₹0")
-        c4.metric("🧾 Transactions", len(view_df))
+        c1.metric("💰 Total Expenses",   fmt_inr(total))
+        c2.metric("🧾 Transactions",      n_txn)
+        c3.metric("📁 Month",             st.session_state.month_label or "—")
+        c4.metric("⚠️ Uncategorised",     n_other, help="Added to 'Other' in output")
 
         st.divider()
 
-        # ── Aggregations
-        by_main = view_df.groupby("Main Category")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
-        by_head = view_df.groupby("Expense Head")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
-        by_head = by_head[by_head["Expense Head"].str.strip() != ""]
-
         col1, col2 = st.columns(2)
-
         with col1:
-            st.subheader("By Main Category")
-            fig_pie = px.pie(
-                by_main, values="Amount", names="Main Category",
-                hole=0.4,
-                color_discrete_sequence=px.colors.qualitative.Bold,
-            )
-            fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), showlegend=False, height=320)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.subheader("By Section")
+            by_group = combined.groupby("Main Group")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
+            fig = px.pie(by_group, values="Amount", names="Main Group", hole=0.4,
+                         color_discrete_sequence=px.colors.qualitative.Bold)
+            fig.update_traces(textposition="inside", textinfo="percent+label")
+            fig.update_layout(margin=dict(t=10,b=10,l=10,r=10), showlegend=False, height=300)
+            st.plotly_chart(fig, use_container_width=True)
 
         with col2:
-            st.subheader("Top Expense Heads")
-            fig_bar = px.bar(
-                by_head.head(12), x="Amount", y="Expense Head",
-                orientation="h",
-                color="Amount",
-                color_continuous_scale="Blues",
-                text=by_head.head(12)["Amount"].apply(fmt_inr),
-            )
-            fig_bar.update_traces(textposition="outside")
-            fig_bar.update_layout(
-                margin=dict(t=10, b=10, l=10, r=60),
-                yaxis=dict(autorange="reversed"),
-                coloraxis_showscale=False,
-                height=320,
-                xaxis_title="",
-                yaxis_title="",
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.subheader("Top 12 Expense Heads")
+            by_head = combined.groupby("Expense Head")["Amount"].sum().reset_index()
+            by_head = by_head[by_head["Expense Head"].str.strip() != ""].sort_values("Amount", ascending=False)
+            fig2 = px.bar(by_head.head(12), x="Amount", y="Expense Head", orientation="h",
+                          color="Amount", color_continuous_scale="Blues",
+                          text=by_head.head(12)["Amount"].apply(fmt_inr))
+            fig2.update_traces(textposition="outside")
+            fig2.update_layout(margin=dict(t=10,b=10,l=10,r=60),
+                               yaxis=dict(autorange="reversed"),
+                               coloraxis_showscale=False, height=300,
+                               xaxis_title="", yaxis_title="")
+            st.plotly_chart(fig2, use_container_width=True)
 
-        # ── Category Breakdown Table
-        st.subheader("📋 Category Breakdown")
-        total_amt = view_df["Amount"].sum()
+        # Section breakdown table
+        st.subheader("📋 Section Breakdown")
+        rows = []
+        for section, heads in SUMMARY_STRUCTURE.items():
+            amt = sum(combined[combined["Expense Head"].str.strip().str.lower() == h.strip().lower()]["Amount"].sum()
+                      for h in heads)
+            rows.append({"Section": section, "Amount (₹)": f"₹{amt:,.2f}",
+                         "% of Total": f"{(amt/total*100):.1f}%" if total else "0%"})
+        other_amt = combined[combined["Main Group"] == "Other"]["Amount"].sum()
+        if other_amt > 0:
+            rows.append({"Section": "Other / Uncategorised", "Amount (₹)": f"₹{other_amt:,.2f}",
+                         "% of Total": f"{(other_amt/total*100):.1f}%"})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-        breakdown_rows = []
-        for _, row in by_main.iterrows():
-            cat = row["Main Category"]
-            amt = row["Amount"]
-            sub_heads = view_df[view_df["Main Category"] == cat]["Expense Head"].value_counts()
-            sub_heads = [h for h in sub_heads.index if h.strip()]
-            breakdown_rows.append({
-                "Main Category": cat,
-                "Amount (₹)": f"₹{amt:,.0f}",
-                "% of Total": f"{(amt/total_amt*100):.1f}%",
-                "Sub-categories": ", ".join(sub_heads[:6]) + ("…" if len(sub_heads) > 6 else ""),
-            })
-
-        st.dataframe(
-            pd.DataFrame(breakdown_rows),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        # ── Monthly trend (if multiple months)
-        if len(combined["Source"].unique()) > 1:
-            st.subheader("📅 Month-wise Trend")
-            monthly = combined.groupby(["Source", "Main Category"])["Amount"].sum().reset_index()
-            fig_trend = px.bar(
-                monthly, x="Source", y="Amount", color="Main Category",
-                barmode="stack",
-                color_discrete_sequence=px.colors.qualitative.Bold,
-            )
-            fig_trend.update_layout(
-                margin=dict(t=10, b=10),
-                xaxis_title="Month",
-                yaxis_title="Amount (₹)",
-                legend_title="Category",
-                height=350,
-            )
-            st.plotly_chart(fig_trend, use_container_width=True)
-
-# ══════════════════════════════════════════════════════════
-# TAB 2 — ALL RECORDS
-# ══════════════════════════════════════════════════════════
+# ══ TAB 2: ALL RECORDS ═══════════════════════════════════════════════════════
 with tab2:
     if combined.empty:
-        st.info("No records yet. Upload a file or add cash expenses.")
+        st.info("No records yet.")
     else:
-        search = st.text_input("🔍 Search description", placeholder="e.g. salary, fuel…")
-        cat_filter = st.multiselect("Filter by Main Category", options=sorted(combined["Main Category"].unique()))
+        col_s, col_f = st.columns([2, 2])
+        with col_s:
+            search = st.text_input("🔍 Search description", placeholder="salary, fuel…")
+        with col_f:
+            grp_filter = st.multiselect("Filter by Section", options=sorted(combined["Main Group"].unique()))
 
-        filtered = combined.copy()
+        view = combined.copy()
         if search:
-            filtered = filtered[filtered["Description"].str.contains(search, case=False, na=False)]
-        if cat_filter:
-            filtered = filtered[filtered["Main Category"].isin(cat_filter)]
+            view = view[view["Description"].str.contains(search, case=False, na=False)]
+        if grp_filter:
+            view = view[view["Main Group"].isin(grp_filter)]
 
-        st.caption(f"Showing **{len(filtered)}** of {len(combined)} records · Total: ₹{filtered['Amount'].sum():,.0f}")
-
-        show_cols = ["Date", "Description", "Amount", "Expense Head", "Main Category", "Source", "Type"]
-        show_cols = [c for c in show_cols if c in filtered.columns]
+        st.caption(f"**{len(view)}** records · Total: ₹{view['Amount'].sum():,.2f}")
+        show = ["Date", "Description", "Amount", "Expense Head", "Main Group", "Account"]
+        show = [c for c in show if c in view.columns]
         st.dataframe(
-            filtered[show_cols].sort_values("Amount", ascending=False),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Amount": st.column_config.NumberColumn("Amount (₹)", format="₹%d"),
-            }
+            view[show].sort_values("Amount", ascending=False),
+            use_container_width=True, hide_index=True,
+            column_config={"Amount": st.column_config.NumberColumn("Amount (₹)", format="₹%.2f")}
         )
 
-# ══════════════════════════════════════════════════════════
-# TAB 3 — CASH ENTRY
-# ══════════════════════════════════════════════════════════
+# ══ TAB 3: CASH ENTRY ════════════════════════════════════════════════════════
 with tab3:
-    col1, col2 = st.columns([1, 1], gap="large")
-
+    col1, col2 = st.columns(2, gap="large")
     with col1:
         st.subheader("➕ Add Cash Expense")
         with st.form("cash_form", clear_on_submit=True):
-            title   = st.text_input("Title / Description *", placeholder="e.g. Vegetables from market")
-            amount  = st.number_input("Amount (₹) *", min_value=0.0, step=10.0, format="%.2f")
-            head    = st.selectbox("Expense Head *", ["— Select —"] + ALL_EXPENSE_HEADS)
-            auto_mc = get_main_category(head) if head != "— Select —" else None
-            mc      = st.selectbox(
-                "Main Category",
-                MAIN_CATEGORIES,
-                index=MAIN_CATEGORIES.index(auto_mc) if auto_mc and auto_mc in MAIN_CATEGORIES else len(MAIN_CATEGORIES)-1,
-            )
-            custom_head = st.text_input("Or enter custom expense head", placeholder="Leave blank if selected above")
-            submitted = st.form_submit_button("✅ Add Cash Expense", use_container_width=True, type="primary")
-
-            if submitted:
-                final_head = custom_head.strip() if custom_head.strip() else head
-                if not title:
-                    st.error("Title is required.")
-                elif amount <= 0:
-                    st.error("Amount must be greater than 0.")
-                elif final_head == "— Select —":
-                    st.error("Please select or enter an expense head.")
+            title  = st.text_input("Title / Description *", placeholder="e.g. Petrol for generator")
+            amount = st.number_input("Amount (₹) *", min_value=0.0, step=10.0, format="%.2f")
+            head   = st.selectbox("Expense Head *", ["— Select —"] + ALL_KNOWN_HEADS)
+            custom = st.text_input("Or type custom Expense Head", placeholder="Leave blank if selected above")
+            if st.form_submit_button("✅ Add", use_container_width=True, type="primary"):
+                final_head = custom.strip() if custom.strip() else (head if head != "— Select —" else "")
+                if not title:            st.error("Title required.")
+                elif amount <= 0:        st.error("Amount must be > 0.")
+                elif not final_head:     st.error("Select or type an expense head.")
                 else:
-                    final_mc = mc if mc else (get_main_category(final_head) or "Other")
                     st.session_state.cash_entries.append({
-                        "Date": pd.Timestamp.today().strftime("%d/%m/%y"),
+                        "Date": datetime.today().strftime("%d/%m/%y"),
                         "Description": title,
                         "Amount": float(amount),
                         "Expense Head": final_head,
-                        "Main Category": final_mc,
-                        "Source": "Cash",
-                        "Type": "Cash",
+                        "Main Group": get_group(final_head),
+                        "Account": "Cash",
                         "Needs Category": False,
                     })
-                    st.success(f"✅ Added: {title} — ₹{amount:,.0f} under {final_head}")
+                    st.success(f"Added ₹{amount:,.0f} — {final_head}")
                     st.rerun()
 
     with col2:
@@ -514,17 +561,36 @@ with tab3:
         if not st.session_state.cash_entries:
             st.info("No cash entries yet.")
         else:
-            cash_view = pd.DataFrame(st.session_state.cash_entries)[
-                ["Date", "Description", "Amount", "Expense Head", "Main Category"]
-            ]
-            st.dataframe(cash_view, use_container_width=True, hide_index=True,
-                         column_config={"Amount": st.column_config.NumberColumn("Amount (₹)", format="₹%d")})
-            st.metric("Total Cash Expenses", f"₹{cash_view['Amount'].sum():,.0f}")
-
+            cdf = pd.DataFrame(st.session_state.cash_entries)[["Date","Description","Amount","Expense Head","Main Group"]]
+            st.dataframe(cdf, use_container_width=True, hide_index=True,
+                         column_config={"Amount": st.column_config.NumberColumn("₹", format="₹%.2f")})
+            st.metric("Total Cash", f"₹{cdf['Amount'].sum():,.2f}")
             if st.button("🗑️ Clear all cash entries"):
                 st.session_state.cash_entries = []
                 st.rerun()
 
-# ─── Footer ───────────────────────────────────────────────────────────────────
-st.divider()
-st.caption("AB Group Internal Finance Tool · Phase 1 · Built with Streamlit")
+# ══ TAB 4: CATEGORISE ════════════════════════════════════════════════════════
+with tab4:
+    st.subheader("🏷️ Entries with Missing Expense Head")
+    if df.empty:
+        st.info("Upload a file first.")
+    else:
+        missing = df[df["Needs Category"] == True].copy()
+        if missing.empty:
+            st.success("✅ All entries have an Expense Head.")
+        else:
+            st.warning(f"{len(missing)} entries have no Expense Head — currently assigned to **Other**.")
+            for idx, item in missing.iterrows():
+                c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+                c1.caption(f"**{item['Description'][:55]}**  \n{item['Date']} · ₹{item['Amount']:,.0f}")
+                new_head = c2.selectbox("Expense Head", ["— Select —"] + ALL_KNOWN_HEADS, key=f"h_{idx}")
+                custom_h = c3.text_input("Custom", key=f"ch_{idx}", placeholder="or type here")
+                c4.write("")
+                if c4.button("Save", key=f"s_{idx}"):
+                    final = custom_h.strip() if custom_h.strip() else (new_head if new_head != "— Select —" else "")
+                    if final:
+                        st.session_state.records.at[idx, "Expense Head"] = final
+                        st.session_state.records.at[idx, "Main Group"]   = get_group(final)
+                        st.session_state.records.at[idx, "Needs Category"] = False
+                        st.rerun()
+
