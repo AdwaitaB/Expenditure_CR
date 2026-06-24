@@ -39,6 +39,11 @@ st.markdown("""
     }
     div[data-testid="stMetricValue"] { color: #1E3A5F !important; }
     div[data-testid="stMetricLabel"] { color: ##073482 !important; }
+    div[data-testid="stMetricLabel"] *,
+    div[data-testid="stMetricLabel"] p,
+    div[data-testid="stMetricLabel"] label {
+        color: #111827 !important;
+}
 
     /* Buttons */
     .stButton > button { border-radius: 8px; font-weight: 600; }
